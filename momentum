@@ -1,0 +1,145 @@
+#load "JY\A股代码"
+#load "JY\GetBars and GetPerf"
+#load "JY\jy GetLimitStatus GetSuspendStatus"
+#load "JY\jy GetSpecialStatus"
+#load "JY\jy GetFundamentals"
+#load "JY\jy GetStockPerformance GetTotalMV"
+#load "JY\jy GetIndustry"
+
+void Main()
+{
+	
+	cal_perf1();
+	
+}
+
+
+void cal_perf1()
+{
+
+	SecuMain[] secus = SecuMain.Where(o => (o.SecuMarket == (int)SecuMarket_Enum.SHSE || o.SecuMarket == (int)SecuMarket_Enum.SZSE)
+					&& (o.SecuCategory == (int)SecuCategory_Enum.AShares)).ToArray();
+
+	DateTime[] dates = TDays.GetDays("2010-01-01".ToDateTime(), DateTime.Now.Date).GroupBy(o => o.ToString("yyyyMM")).Select(g => g.First()).ToArray();
+
+	var sub1 = dates.Select((date, idx) =>
+	{
+		$"{DateTime.Now}, [{idx + 1}]/{dates.Length}, {date}".Dump();
+
+		var list1 = secus.Select(sec =>
+		{
+			if (sec.ListedDate is null || date <= sec.ListedDate.Value.AddYears(1)) //IPO终止，上市不满1年的不算
+				return null;
+			//计算表现					
+			int isST = jy_GetSpecialStatus(sec.InnerCode, date);
+			int isLimit = jy_GetLimitStatus(sec.InnerCode, date);
+			int isSuspend = jy_GetSuspendStatus(sec.InnerCode, date);
+			if (isST != 0 || isLimit != 0 || isSuspend != 0) return null;
+			string code = sec.WindCode();
+			string name = sec.Name();
+			double mktCap = jy_GetTotalMV_date(sec.InnerCode, date);
+					
+			string SW1_name = jy_GetIndustryName(sec.InnerCode, date, Standard_Enum.申万行业分类, 1);
+			string SW2_name = jy_GetIndustryName(sec.InnerCode, date, Standard_Enum.申万行业分类, 2);
+			string SW3_name = jy_GetIndustryName(sec.InnerCode, date, Standard_Enum.申万行业分类, 3);			
+			PerfSummary ff = GetPerfSummary(sec.InnerCode, date);
+			double p6m = GetPerf(sec.InnerCode, date.TOffset(-120), date);
+			double p12m = GetPerf(sec.InnerCode, date.TOffset(-240), date);
+			double p12_1m = GetPerf(sec.InnerCode, date.TOffset(-240), date.TOffset(-20));
+			
+			return new
+			{
+				code, name, date, date.Year, mktCap, SW1_name, SW2_name, SW3_name, 
+				ff.f10, ff.f20, ff.f60, ff.f6m, ff.f7_12m, ff.f13_24m, ff.f10_to_hs300, ff.f20_to_hs300, ff.f60_to_hs300, ff.f6m_to_hs300, ff.f7_12m_to_hs300, ff.f13_24m_to_hs300, ff.p20, ff.p60, p6m, p12m, p12_1m					
+			};
+		})
+		.Where(o => o != null && !double.IsNaN(o.mktCap))
+		.ToArray();
+		
+		int[] rankcat_mkt_2g = list1.Select(a => a.mktCap).Rankcat(2);
+		int[] rankcat_mkt_5g = list1.Select(a => a.mktCap).Rankcat(5);
+		int[] rankcat_mkt_10g = list1.Select(a => a.mktCap).Rankcat(10);
+		int[] rankcat_p20 = list1.Select(a => a.p20).Rankcat(2);
+		int[] rankcat_p60 = list1.Select(a => a.p60).Rankcat(2);
+		int[] rankcat_p6m = list1.Select(a => a.p6m).Rankcat(2);
+		int[] rankcat_p12m = list1.Select(a => a.p12m).Rankcat(2);
+		int[] rankcat_p12_1m = list1.Select(a => a.p12_1m).Rankcat(2);
+		var list11 = list1.Select((o, i) => 
+		{
+			int cat_mkt_2g = rankcat_mkt_2g[i];
+			int cat_mkt_5g = rankcat_mkt_5g[i];
+			int cat_mkt_10g = rankcat_mkt_10g[i];
+			int cat_p20 = rankcat_p20[i];
+			int cat_p60 = rankcat_p60[i];
+			int cat_p6m = rankcat_p6m[i];
+			int cat_p12m = rankcat_p12m[i];
+			int cat_p12_1m = rankcat_p12_1m[i];
+			return new {o.code, o.name, o.date, o.Year, o.mktCap, o.SW1_name, o.SW2_name, o.SW3_name, o.f10, o.f20, o.f60, o.f6m, o.f7_12m, o.f13_24m, o.f10_to_hs300, o.f20_to_hs300, o.f60_to_hs300, o.f6m_to_hs300, o.f7_12m_to_hs300, o.f13_24m_to_hs300, 
+			o.p20, o.p60, o.p6m, o.p12m, o.p12_1m,  cat_mkt_2g, cat_mkt_5g, cat_mkt_10g, cat_p20, cat_p60, cat_p6m, cat_p12m, cat_p12_1m};			
+		}).ToArray();
+
+		var list_ind = list11.GroupBy(o => o.SW2_name).Select(g => 
+		{
+			double sum_mkt = g.Sum(a => a.mktCap);
+			double ind_perf_p20 = g.Where(a => !double.IsNaN(a.p20)).Sum(a => a.p20 * a.mktCap / sum_mkt);
+			double ind_perf_p60 = g.Where(a => !double.IsNaN(a.p60)).Sum(a => a.p60 * a.mktCap / sum_mkt);
+			double ind_perf_p6m = g.Where(a => !double.IsNaN(a.p6m)).Sum(a => a.p6m * a.mktCap / sum_mkt);
+			double ind_perf_p12m = g.Where(a => !double.IsNaN(a.p12m)).Sum(a => a.p12m * a.mktCap / sum_mkt);
+			double ind_perf_p12_1m = g.Where(a => !double.IsNaN(a.p12_1m)).Sum(a => a.p12_1m * a.mktCap / sum_mkt);
+			var arr = g.Select((o, i) => 
+			{				
+				double perf_toInd_p20 = o.p20 - ind_perf_p20;
+				double perf_toInd_p60 = o.p60 - ind_perf_p60;
+				double perf_toInd_p6m = o.p6m - ind_perf_p6m;
+				double perf_toInd_p12m = o.p12m - ind_perf_p12m;
+				double perf_toInd_p12_1m = o.p12_1m - ind_perf_p12_1m;
+				return new {o.code, o.name, o.date, o.Year, o.mktCap, o.SW1_name, o.SW2_name, o.SW3_name, o.f10, o.f20, o.f60, o.f6m, o.f7_12m, o.f13_24m, o.f10_to_hs300, o.f20_to_hs300, o.f60_to_hs300, o.f6m_to_hs300, o.f7_12m_to_hs300, o.f13_24m_to_hs300, o.p20, o.p60, o.p6m, o.p12m, o.p12_1m, o.cat_mkt_2g, o.cat_mkt_5g, o.cat_mkt_10g, o.cat_p20, o.cat_p60, o.cat_p6m, o.cat_p12m, o.cat_p12_1m, 
+				ind_perf_p20, ind_perf_p60, ind_perf_p6m, ind_perf_p12m, ind_perf_p12_1m, perf_toInd_p20, perf_toInd_p60, perf_toInd_p6m, perf_toInd_p12m, perf_toInd_p12_1m};
+			}).ToArray();
+			int[] rankcat_perf_toInd_p20 = arr.Select(a => a.perf_toInd_p20).Rankcat(2);
+			int[] rankcat_perf_toInd_p60 = arr.Select(a => a.perf_toInd_p60).Rankcat(2);
+			int[] rankcat_perf_toInd_p6m = arr.Select(a => a.perf_toInd_p6m).Rankcat(2);
+			int[] rankcat_perf_toInd_p12m = arr.Select(a => a.perf_toInd_p12m).Rankcat(2);
+			int[] rankcat_perf_toInd_p12_1m = arr.Select(a => a.perf_toInd_p12_1m).Rankcat(2);
+			var arr1 = arr.Select((o, i) =>
+			{
+				int cat_perf_toInd_p20 = rankcat_perf_toInd_p20[i];
+				int cat_perf_toInd_p60 = rankcat_perf_toInd_p60[i];
+				int cat_perf_toInd_p6m = rankcat_perf_toInd_p6m[i];
+				int cat_perf_toInd_p12m = rankcat_perf_toInd_p12m[i];
+				int cat_perf_toInd_p12_1m = rankcat_perf_toInd_p12_1m[i];
+				return new {o.code, o.name, o.date, o.Year, o.mktCap, o.SW1_name, o.SW2_name, o.SW3_name, o.f10, o.f20, o.f60, o.f6m, o.f7_12m, o.f13_24m, o.f10_to_hs300, o.f20_to_hs300, o.f60_to_hs300, o.f6m_to_hs300, o.f7_12m_to_hs300, o.f13_24m_to_hs300, o.p20, o.p60, o.p6m, o.p12m, o.p12_1m, o.cat_mkt_2g, o.cat_mkt_5g, o.cat_mkt_10g, o.cat_p20, o.cat_p60, o.cat_p6m, o.cat_p12m, o.cat_p12_1m, o.ind_perf_p20, o.ind_perf_p60, o.ind_perf_p6m, o.ind_perf_p12m, o.ind_perf_p12_1m, o.perf_toInd_p20, o.perf_toInd_p60, o.perf_toInd_p6m, o.perf_toInd_p12m, o.perf_toInd_p12_1m,
+				cat_perf_toInd_p20, cat_perf_toInd_p60, cat_perf_toInd_p6m,cat_perf_toInd_p12m, cat_perf_toInd_p12_1m};
+			}).ToArray();
+			
+			return arr1;
+		}).SelectMany(o => o).ToArray();
+
+		int[] rankcat_ind_perf_p20 = list_ind.Select(a => a.ind_perf_p20).Rankcat(2);
+		int[] rankcat_ind_perf_p60 = list_ind.Select(a => a.ind_perf_p60).Rankcat(2);
+		int[] rankcat_ind_perf_p6m = list_ind.Select(a => a.ind_perf_p6m).Rankcat(2);
+		int[] rankcat_ind_perf_p12m = list_ind.Select(a => a.ind_perf_p12m).Rankcat(2);
+		int[] rankcat_ind_perf_p12_1m = list_ind.Select(a => a.ind_perf_p12_1m).Rankcat(2);
+		
+		var list2 = list_ind.Select((o, i) =>
+		{
+			int cat_ind_perf_p20 = rankcat_ind_perf_p20[i];
+			int cat_ind_perf_p60 = rankcat_ind_perf_p60[i];
+			int cat_ind_perf_p6m = rankcat_ind_perf_p6m[i];
+			int cat_ind_perf_p12m = rankcat_ind_perf_p12m[i];
+			int cat_ind_perf_p12_1m = rankcat_ind_perf_p12_1m[i];
+			
+			return new {o.code, o.name, o.date, o.Year, o.mktCap, o.SW1_name, o.SW2_name, o.SW3_name, o.f10, o.f20, o.f60, o.f6m, o.f7_12m, o.f13_24m, o.f10_to_hs300, o.f20_to_hs300, o.f60_to_hs300, o.f6m_to_hs300, o.f7_12m_to_hs300, o.f13_24m_to_hs300, o.p20, o.p60, o.p6m, o.p12m, o.p12_1m, o.cat_mkt_2g, o.cat_mkt_5g, o.cat_mkt_10g, o.cat_p20, o.cat_p60, o.cat_p6m, o.cat_p12m, o.cat_p12_1m, o.ind_perf_p20, o.ind_perf_p60, o.ind_perf_p6m, o.ind_perf_p12m, o.ind_perf_p12_1m, 
+			cat_ind_perf_p20, cat_ind_perf_p60, cat_ind_perf_p6m,cat_ind_perf_p12m, cat_ind_perf_p12_1m, o.cat_perf_toInd_p20, o.cat_perf_toInd_p60, o.cat_perf_toInd_p6m, o.cat_perf_toInd_p12m, o.cat_perf_toInd_p12_1m};
+		}).ToArray();
+		
+
+		return list2;
+	})
+	.SelectMany(o => o)
+	.ToArray();
+	
+	string csv1 = @"D:\test\行业动量排名.csv";
+	Util.WriteCsv(sub1, csv1);
+	
+}
